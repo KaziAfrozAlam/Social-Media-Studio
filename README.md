@@ -1,4 +1,4 @@
-# Social Media Studio
+# Social Media Studio (FlyRankAI Capstone)
 
 Turn **one blog post** into a full multi-platform social campaign with a
 human review gate and an **idempotent, crash-safe scheduler**:
