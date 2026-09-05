@@ -1,0 +1,64 @@
+
+### 1. Ingest: pasted Markdown
+  POST /api/posts -> 201
+
+### 2. Ingest: via URL fetch
+  POST /api/posts -> 201
+  fetched content length: 288
+
+### 3. Generate one variant per platform (stored post is the source of truth)
+  POST /api/posts/6e98a4fa39e049fe8d5a4d079f96cdbd/variants -> 201
+  [x] 248 chars, draft
+    '🚨 How We Built a Crash-Safe Publisher\n\nAfter three months of building, our team '...
+  [linkedin] 491 chars, draft
+    '📌 How We Built a Crash-Safe Publisher\n\nAfter three months of building, our team '...
+  [telegram] 410 chars, draft
+    '📰 How We Built a Crash-Safe Publisher\n\nAfter three months of building, our team '...
+
+### 4. Constraint enforcement: break a rule, get it blocked with the rule named
+  POST /api/variants -> 422
+  {"detail": ["linkedin: hashtag count 0 below minimum 3"]}
+  BLOCKED: linkedin: hashtag count 0 below minimum 3
+  POST /api/variants -> 422
+  {"detail": ["x: content length 300 exceeds max 280"]}
+  BLOCKED: x: content length 300 exceeds max 280
+
+### 5. Review: unapproved variant cannot be scheduled
+  POST /api/slots -> 409
+  {"detail": "variant 45e0ee4d7a4e457d84b268677e9e6116 is 'draft', not 'approved'; only approved variants can be scheduled"}
+  -> 409: variant 45e0ee4d7a4e457d84b268677e9e6116 is 'draft', not 'approved'; only approved variants can be scheduled
+
+### 6. Approve + schedule
+  POST /api/variants/45e0ee4d7a4e457d84b268677e9e6116/approve -> 200
+  POST /api/slots -> 201
+  idempotency_key: slot:45e0ee4d7a4e457d84b268677e9e6116:2026-09-04T20:26:34.587555
+
+### 7. Durable worker publishes the due slot (real worker subprocess)
+  worker output: ['2026-09-05 01:56:36,450 INFO WORKER published key=slot:45e0ee4d7a4e457d84b268677e9e6116:2026-09-04T20:26:34.587555 via x -> mock://x/41a43d101def4010a03421985427135f', "2026-09-05 01:56:36,454 INFO WORKER published 1 slot(s): ['slot:45e0ee4d7a4e457d84b268677e9e6116:2026-09-04T20:26:34.587555']"]
+  GET /api/history -> 200
+  attempt: platform=x status=success url=mock://x/41a43d101def4010a03421985427135f
+
+### 8. Idempotent repeat-publish: same slot called again => zero new posts
+  POST /api/sweep -> 200
+  POST /api/sweep -> 200
+  POST /api/sweep -> 200
+  outbox rows before=1 after 3 more sweeps => 1 (must stay 1)
+
+### 9. Crash-restart: two slots, worker dies after the first, restart -> no dupes
+  worker #1 exit code: 1 (expected 1 = crashed)
+  2026-09-05 01:56:42,746 INFO WORKER published key=slot:ee018c8ac4d645a4ad0d5a6cc03b5b0d:2026-09-04T20:26:38.705124 via x -> mock://x/83657afca9204a049908c0d4f0076160
+  2026-09-05 01:56:42,751 INFO WORKER CRASH SIMULATION: published 1 slot(s) this sweep; exiting now (SCHEDULER_CRASH_AFTER=1) to prove resume-without-duplicates
+  worker #2 exit code: 0
+  total outbox rows now=4, duplicate keys=0
+  rows=4 (expected 4: 1 from section 7 + 3 crash campaign)
+
+### 10. Publish history is visible and queryable
+  GET /api/history -> 200
+  total attempts recorded: 4
+    [x] success mock://x/41a43d101def4010a03421985427135f
+    [x] success mock://x/83657afca9204a049908c0d4f0076160
+    [linkedin] success mock://linkedin/391985b7999343a3a4a73a04c35d5fc8
+    [telegram] success mock://linkedin/6aba6eb718a54759a5383b1de8d8058b
+
+== ALL CHECKS PASSED ==
+
